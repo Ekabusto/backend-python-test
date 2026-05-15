@@ -3,8 +3,10 @@ import uuid
 from enum import Enum
 from typing import Literal
 
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from pydantic import BaseModel
+
+from provider_client import ProviderError, send_notification
 
 app = FastAPI(title="Notification Service (Technical Test)")
 
@@ -56,3 +58,34 @@ async def get_request_status(request_id: str) -> dict:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Request not found")
     return {"id": record.id, "status": record.status}
+
+
+async def _process_notification(request_id: str) -> None:
+    async with _store_lock:
+        record = _store.get(request_id)
+        if record is None:
+            return
+        _store[request_id] = record.model_copy(update={"status": NotificationStatus.processing})
+
+    try:
+        await send_notification(record.to, record.message, record.type)
+        new_status = NotificationStatus.sent
+    except ProviderError:
+        new_status = NotificationStatus.failed
+
+    async with _store_lock:
+        record = _store.get(request_id)
+        if record:
+            _store[request_id] = record.model_copy(update={"status": new_status})
+
+
+@app.post("/v1/requests/{request_id}/process", status_code=202)
+async def process_request(request_id: str, background_tasks: BackgroundTasks) -> dict:
+    async with _store_lock:
+        record = _store.get(request_id)
+    if record is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    background_tasks.add_task(_process_notification, request_id)
+    return {"id": request_id, "status": "processing"}
