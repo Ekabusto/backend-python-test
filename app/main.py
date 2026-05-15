@@ -32,6 +32,7 @@ class RequestRecord(BaseModel):
     status: NotificationStatus
 
 
+# Guardo todo en memoria por ahora, si esto escalara habría que meter una BD (logico)
 _store: dict[str, RequestRecord] = {}
 _store_lock = asyncio.Lock()
 
@@ -61,6 +62,7 @@ async def get_request_status(request_id: str) -> dict:
 
 
 async def _process_notification(request_id: str) -> None:
+    # Primero marco como processing para que el cliente sepa que ya está en marcha
     async with _store_lock:
         record = _store.get(request_id)
         if record is None:
@@ -71,6 +73,7 @@ async def _process_notification(request_id: str) -> None:
         await send_notification(record.to, record.message, record.type)
         new_status = NotificationStatus.sent
     except ProviderError:
+        # Si falla después de todos los reintentos no queda otra que marcarlo como failed
         new_status = NotificationStatus.failed
 
     async with _store_lock:
@@ -87,5 +90,6 @@ async def process_request(request_id: str, background_tasks: BackgroundTasks) ->
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Request not found")
 
+    # Lanzo el envío en background para no bloquear la respuesta al cliente
     background_tasks.add_task(_process_notification, request_id)
     return {"id": request_id, "status": "processing"}
