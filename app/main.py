@@ -32,3 +32,27 @@ class RequestRecord(BaseModel):
 
 _store: dict[str, RequestRecord] = {}
 _store_lock = asyncio.Lock()
+
+
+@app.post("/v1/requests", status_code=201)
+async def register_request(body: NotificationRequest) -> dict:
+    record = RequestRecord(
+        id=str(uuid.uuid4()),
+        to=body.to,
+        message=body.message,
+        type=body.type,
+        status=NotificationStatus.queued,
+    )
+    async with _store_lock:
+        _store[record.id] = record
+    return {"id": record.id}
+
+
+@app.get("/v1/requests/{request_id}")
+async def get_request_status(request_id: str) -> dict:
+    async with _store_lock:
+        record = _store.get(request_id)
+    if record is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Request not found")
+    return {"id": record.id, "status": record.status}
